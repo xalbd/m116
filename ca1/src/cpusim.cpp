@@ -1,12 +1,8 @@
 #include "CPU.h"
 
 #include <iostream>
-#include <bitset>
-#include <cstdio>
-#include <cstdlib>
 #include <string>
 #include <fstream>
-#include <sstream>
 using namespace std;
 
 int main(const int argc, char *argv[]) {
@@ -30,25 +26,19 @@ int main(const int argc, char *argv[]) {
 	int i = 0;
 	while (infile) {
 		infile >> line;
-		const unsigned int grabbedValue = stoul(line, nullptr, 16);
-
-		if (i >= MEMORY_LIMIT) {
-			cout << "Instruction memory too long. Exiting..." << endl;
-		}
-		else if (grabbedValue > numeric_limits<unsigned char>::max()) {
-			cout << "Error parsing instruction. Exiting..." << endl;
-			return 0;
-		}
-
-		cpu.setIMemory(i, grabbedValue);
+		cpu.setIMemory(i, stoi(line, nullptr, 16));
 		i++;
 	}
 
 	// Main loop
-	bool done = true;
-	while (done == true) {
-		cpu.fetchInstruction();
+	while (true) {
+		if (!cpu.fetchInstruction()) {
+			break;
+		}
 		cpu.decodeInstruction();
+		cpu.execute();
+		cpu.writeback();
+		// cpu.printRegs();
 
 		cpu.incPC();
 		if (cpu.readPC() >= MEMORY_LIMIT / 4) {
@@ -56,9 +46,6 @@ int main(const int argc, char *argv[]) {
 		}
 	}
 
-	int a0 = 0;
-	int a1 = 0;
-	cout << "(" << a0 << "," << a1 << ")" << endl;
-
+	cpu.output();
 	return 0;
 }
