@@ -37,8 +37,9 @@ int main(const int argc, char *argv[]) {
 		}
 		cpu.decodeInstruction();
 		cpu.execute();
+		cpu.memory();
 		cpu.writeback();
-		// cpu.printRegs();
+		cpu.printRegs();
 
 		cpu.incPC();
 		if (cpu.readPC() >= MEMORY_LIMIT / 4) {

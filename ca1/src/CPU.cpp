@@ -20,11 +20,16 @@ CPU::CPU() : dmemory(), imemory(), reg() {
 	aluControl = 0;
 	aluResult = 0;
 	aluZero = false;
+	memReadData = 0;
 }
 
 void CPU::printRegs() {
+	cerr << hex << instr << endl;
 	for (int i = 0; i < 32; i++) {
 		cerr << i << ": " << reg[i] << endl;
+	}
+	for (int i = 0; i < 5; i++) {
+		cerr << (int) dmemory[i] << endl;
 	}
 	cerr << endl;
 }
@@ -61,6 +66,7 @@ void CPU::decodeInstruction() {
 void CPU::generateImm() {
 	switch (opcode) {
 		case I_TYPE:
+		case LOAD_TYPE:
 			imm = funct7 << 5 | rs2;
 			break;
 		case S_TYPE:
@@ -103,6 +109,7 @@ void CPU::setControlSignals() {
 			}
 			break;
 		case I_TYPE:
+		case LOAD_TYPE:
 			regWrite = true;
 			aluSrc = true;
 			branch = false;
@@ -113,6 +120,8 @@ void CPU::setControlSignals() {
 				aluOp = 0b10;
 			} else {
 				aluOp = 0b00;
+				memRead = true;
+				memToReg = true;
 			}
 			break;
 		case U_TYPE:
@@ -122,6 +131,15 @@ void CPU::setControlSignals() {
 			memRead = false;
 			memWrite = false;
 			memToReg = false;
+			break;
+		case S_TYPE:
+			regWrite = false;
+			aluSrc = true;
+			branch = false;
+			memRead = false;
+			memWrite = true;
+			memToReg = false;
+			aluOp = 0b00;
 			break;
 		default:
 			regWrite = false;
@@ -169,6 +187,7 @@ void CPU::runALU() {
 	const int secondAlu = aluSrc ? imm : reg[rs2];
 	switch (aluControl) {
 		case 0b0010:
+			cerr << "adding " << reg[rs1] << " " << secondAlu << endl;
 			aluResult = reg[rs1] + secondAlu;
 			break;
 		case 0b0110:
@@ -189,10 +208,46 @@ void CPU::runALU() {
 	aluZero = aluResult == 0;
 }
 
+void CPU::memory() {
+	if (!memWrite && !memRead) return;
+
+	if (memWrite) {
+		cerr << "writing" << reg[rs2] << " to " << aluResult << endl;
+		if (funct3 == 0) {
+			dmemory[aluResult] = reg[rs2];
+			cerr << "written: " << hex << (int) dmemory[aluResult] << endl;
+		} else {
+			cerr << dec << reg[rs2] << endl;
+			dmemory[aluResult] = reg[rs2];
+			dmemory[aluResult + 1] = reg[rs2] >> 8;
+			dmemory[aluResult + 2] = reg[rs2] >> 16;
+			dmemory[aluResult + 3] = reg[rs2] >> 24;
+
+			cerr << "written: " << hex << (int) dmemory[aluResult] << endl;
+			cerr << "written: " << hex << (int) dmemory[aluResult + 1] << endl;
+			cerr << "written: " << hex << (int) dmemory[aluResult + 2] << endl;
+			cerr << "written: " << hex << (int) dmemory[aluResult + 3] << endl;
+		}
+	} else {
+		if (funct3 == 0) {
+			memReadData = dmemory[aluResult];
+		} else {
+			cerr << "pulling from: " << aluResult << endl;
+			memReadData = ((int) dmemory[aluResult + 3] << 24) +
+			              ((int) dmemory[aluResult + 2] << 16) +
+			              ((int) dmemory[aluResult + 1] << 8) +
+			              (int) dmemory[aluResult];
+		}
+	}
+}
+
 
 void CPU::writeback() {
-	if (regWrite && !memToReg) {
-		reg[rd] = aluResult;
+	cerr << "in writeback" << endl;
+	cerr << regWrite << endl;
+	if (regWrite) {
+		cerr << "storing to " << rd << endl;
+		reg[rd] = memToReg ? memReadData : aluResult;
 	}
 }
 
