@@ -1,7 +1,7 @@
 #include "CPU.h"
-#include <bitset>
+#include <fstream>
 
-CPU::CPU() : dmemory(), imemory(), reg() {
+CPU::CPU() : imemory(), reg() {
 	PC = 0;
 	instr = 0;
 	opcode = 0;
@@ -17,6 +17,9 @@ CPU::CPU() : dmemory(), imemory(), reg() {
 	memRead = false;
 	memWrite = false;
 	memToReg = false;
+	useRS1 = false;
+	forceJump = false;
+	byteOnly = false;
 	aluOp = 0;
 	aluControl = 0;
 	aluResult = 0;
@@ -24,26 +27,52 @@ CPU::CPU() : dmemory(), imemory(), reg() {
 	memReadData = 0;
 }
 
-void CPU::printRegs() const {
-	cerr << PC / 4 + 1 << endl;
-	/*
-	cerr << hex << instr << endl;
-	for (int i = 0; i < 32; i++) {
-		cerr << i << ": " << reg[i] << endl;
+bool CPU::loadIMemory(const char* file) {
+	ifstream infile(file);
+	if (!(infile.is_open() && infile.good())) {
+		cout << "Error opening file. Exiting..." << endl;
+		return false;
 	}
-	for (int i = 0; i < 5; i++) {
-		cerr << static_cast<int>(dmemory[i]) << endl;
+
+	string line;
+	int i = 0;
+	while (infile) {
+		infile >> line;
+		setIMemory(i, stoi(line, nullptr, 16));
+		i++;
 	}
-	cerr << endl;*/
+
+	return true;
 }
+
+
+void CPU::run() {
+	while (true) {
+		fetchInstruction();
+		if (instr == 0) {
+			break;
+		}
+
+		decodeInstruction();
+		execute();
+		memory();
+		writeback();
+		incPC();
+
+		if (PC >= MEMORY_LIMIT) {
+			break;
+		}
+	}
+}
+
 
 void CPU::output() const {
 	cout << "(" << reg[10] << "," << reg[11] << ")" << endl;
 }
 
 
-void CPU::setIMemory(const unsigned int addr, const unsigned char value) {
-	this->imemory[addr] = value;
+void CPU::setIMemory(const unsigned int addr, const unsigned int value) {
+	this->imemory[addr] = static_cast<unsigned char>(value);
 }
 
 bool CPU::fetchInstruction() {
@@ -138,6 +167,9 @@ void CPU::setControlSignals() {
 			memRead = false;
 			memWrite = false;
 			memToReg = false;
+			useRS1 = true;
+			forceJump = false;
+			byteOnly = false;
 			if (funct3 == 0x0) {
 				aluOp = 0b00;
 			} else {
@@ -152,12 +184,16 @@ void CPU::setControlSignals() {
 			memRead = false;
 			memWrite = false;
 			memToReg = false;
+			useRS1 = true;
+			forceJump = false;
+			byteOnly = false;
 			if (funct3 == 6 || funct3 == 5) {
 				aluOp = 0b10;
 			} else {
 				aluOp = 0b00;
 				memRead = true;
 				memToReg = true;
+				byteOnly = funct3 == 0;
 			}
 			break;
 		case U_TYPE:
@@ -167,6 +203,10 @@ void CPU::setControlSignals() {
 			memRead = false;
 			memWrite = false;
 			memToReg = false;
+			useRS1 = false;
+			forceJump = false;
+			byteOnly = false;
+			aluOp = 0b00;
 			break;
 		case S_TYPE:
 			regWrite = false;
@@ -175,6 +215,9 @@ void CPU::setControlSignals() {
 			memRead = false;
 			memWrite = true;
 			memToReg = false;
+			useRS1 = true;
+			forceJump = false;
+			byteOnly = funct3 == 0;
 			aluOp = 0b00;
 			break;
 		case B_TYPE:
@@ -184,6 +227,9 @@ void CPU::setControlSignals() {
 			memRead = false;
 			memWrite = false;
 			memToReg = false;
+			useRS1 = true;
+			forceJump = false;
+			byteOnly = false;
 			aluOp = 0b01;
 			break;
 		case J_TYPE:
@@ -193,14 +239,12 @@ void CPU::setControlSignals() {
 			memRead = false;
 			memWrite = false;
 			memToReg = false;
+			useRS1 = true;
+			forceJump = true;
+			byteOnly = false;
+			aluOp = 0b00;
 			break;
 		default:
-			regWrite = false;
-			aluSrc = false;
-			branch = false;
-			memRead = false;
-			memWrite = false;
-			memToReg = false;
 			break;
 	}
 }
@@ -237,24 +281,23 @@ void CPU::setALUControlSignal() {
 }
 
 void CPU::runALU() {
+	const int firstAlu = useRS1 ? reg[rs1] : 0;
 	const int secondAlu = aluSrc ? imm : reg[rs2];
 	switch (aluControl) {
 		case 0b0010:
-			cerr << "adding " << reg[rs1] << " " << secondAlu << endl;
-			cerr << hex << instr << endl;
-			aluResult = reg[rs1] + secondAlu;
+			aluResult = firstAlu + secondAlu;
 			break;
 		case 0b0110:
-			aluResult = reg[rs1] - secondAlu;
+			aluResult = firstAlu - secondAlu;
 			break;
 		case 0b1000:
-			aluResult = reg[rs1] | secondAlu;
+			aluResult = firstAlu | secondAlu;
 			break;
 		case 0b1001:
-			aluResult = reg[rs1] ^ secondAlu;
+			aluResult = firstAlu ^ secondAlu;
 			break;
 		case 0b0111:
-			aluResult = reg[rs1] >> (secondAlu & 0b11111);
+			aluResult = firstAlu >> (secondAlu & 0b11111);
 		default:
 			break;
 	}
@@ -266,38 +309,46 @@ void CPU::memory() {
 	if (!memWrite && !memRead) return;
 
 	if (memWrite) {
-		if (funct3 == 0) {
-			dmemory[aluResult] = reg[rs2];
+		bitset<32> write(reg[rs2]);
+		if (byteOnly) {
+			for (int i = 0; i < 8; i++) {
+				dmemory[aluResult][i] = write[i];
+			}
 		} else {
-			dmemory[aluResult] = reg[rs2];
-			dmemory[aluResult + 1] = reg[rs2] >> 8;
-			dmemory[aluResult + 2] = reg[rs2] >> 16;
-			dmemory[aluResult + 3] = reg[rs2] >> 24;
+			for (int byte = 0; byte <= 3; byte++) {
+				for (int i = 0; i < 8; i++) {
+					dmemory[aluResult + byte][i] = write[byte * 8 + i];
+				}
+			}
 		}
 	} else {
-		if (funct3 == 0) {
-			memReadData = static_cast<int>(dmemory[aluResult]) << 24 >> 24;
+		bitset<32> read(0);
+		if (byteOnly) {
+			for (int i = 0; i < 8; i++) {
+				read[i] = dmemory[aluResult][i];
+			}
+			for (int i = 8; i <= 31; i++) {
+				read[i] = read[7];
+			}
 		} else {
-			memReadData = (static_cast<int>(dmemory[aluResult + 3]) << 24) +
-			              (static_cast<int>(dmemory[aluResult + 2]) << 16) +
-			              (static_cast<int>(dmemory[aluResult + 1]) << 8) +
-			              static_cast<int>(dmemory[aluResult]);
+			for (int byte = 0; byte <= 3; byte++) {
+				for (int i = 0; i < 8; i++) {
+					read[byte * 8 + i] = dmemory[aluResult + byte][i];
+				}
+			}
 		}
+
+		memReadData = static_cast<int>(read.to_ulong());
 	}
 }
 
 
 void CPU::writeback() {
 	if (regWrite && rd != 0) {
-		reg[rd] = memToReg ? memReadData : (opcode == J_TYPE ? PC + 4 : aluResult);
+		reg[rd] = memToReg ? memReadData : (forceJump ? PC + 4 : aluResult);
 	}
 }
 
-
-int CPU::readPC() const {
-	return PC;
-}
-
 void CPU::incPC() {
-	PC += branch && (opcode == J_TYPE || aluZero) ? imm : 4;
+	PC += (branch && aluZero) || forceJump ? imm : 4;
 }

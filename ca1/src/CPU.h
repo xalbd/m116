@@ -2,6 +2,7 @@
 #define CPU_H
 
 #include <iostream>
+#include <bitset>
 using namespace std;
 
 const unsigned int MEMORY_LIMIT = 4096;
@@ -18,38 +19,43 @@ class CPU {
 public:
 	CPU();
 
-	void setIMemory(unsigned int addr, unsigned char value);
+	bool loadIMemory(const char* file);
 
-	int readPC() const;
+	void run();
 
-	void incPC();
+	void output() const;
+
+private:
+	void setIMemory(unsigned int addr, unsigned int value);
 
 	bool fetchInstruction();
 
 	void decodeInstruction();
 
+	void generateImm();
+
+	void setControlSignals();
+
 	void execute();
+
+	void setALUControlSignal();
+
+	void runALU();
 
 	void memory();
 
 	void writeback();
 
-	void printRegs() const;
+	void incPC();
 
-	void output() const;
 
-private:
-	void generateImm();
-	void setControlSignals();
-	void setALUControlSignal();
-	void runALU();
-
-	unsigned char dmemory[MEMORY_LIMIT];
+	bitset<8> dmemory[MEMORY_LIMIT];
 	unsigned char imemory[MEMORY_LIMIT];
 	int PC;
 	int reg[32];
 	int instr;
 
+	// instruction segments
 	int opcode;
 	int rs1;
 	int rs2;
@@ -58,18 +64,26 @@ private:
 	int funct7;
 	int imm;
 
+
+	// control signals
 	bool regWrite;
 	bool aluSrc;
 	bool branch;
 	bool memRead;
 	bool memWrite;
 	bool memToReg;
+	bool useRS1;
+	bool forceJump;
+	bool byteOnly;
 	int aluOp;
 
+	// ALU
 	int aluControl;
 	int aluResult;
 	bool aluZero;
 
+
+	// memory
 	int memReadData;
 };
 
