@@ -20,7 +20,7 @@ public:
 
 	void setIMemory(unsigned int addr, unsigned char value);
 
-	unsigned int readPC() const;
+	int readPC() const;
 
 	void incPC();
 
@@ -34,7 +34,7 @@ public:
 
 	void writeback();
 
-	void printRegs();
+	void printRegs() const;
 
 	void output() const;
 
@@ -46,7 +46,7 @@ private:
 
 	unsigned char dmemory[MEMORY_LIMIT];
 	unsigned char imemory[MEMORY_LIMIT];
-	unsigned int PC;
+	int PC;
 	int reg[32];
 	int instr;
 

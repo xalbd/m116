@@ -42,7 +42,7 @@ int main(const int argc, char *argv[]) {
 		cpu.printRegs();
 
 		cpu.incPC();
-		if (cpu.readPC() >= MEMORY_LIMIT / 4) {
+		if (cpu.readPC() >= MEMORY_LIMIT) {
 			break;
 		}
 	}
