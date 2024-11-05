@@ -6,9 +6,17 @@
 #ifndef MY_PREDICTOR_H
 #define MY_PREDICTOR_H
 
+#include <algorithm>
+#include <random>
+using namespace std;
+
+
 static const uint32_t TAG_LENGTH = 9;
-static const uint32_t INDEX_LENGTH = 32 - TAG_LENGTH;
+static const uint32_t INDEX_LENGTH = 10;
 static const uint32_t COMPONENT_SIZE = 1 << INDEX_LENGTH;
+static const uint32_t COMPONENT_COUNT = 5;
+static const uint32_t HISTORY_LENGTH[COMPONENT_COUNT] = {5, 9, 15, 25, 44};
+static const uint32_t HISTORY_BUFFER_LENGTH = HISTORY_LENGTH[COMPONENT_COUNT - 1];
 
 class my_update : public branch_update {
 public:
@@ -19,13 +27,13 @@ class my_predictor : public branch_predictor {
 private:
 	class Tage {
 	public:
-		Tage() : history(0) {
+		Tage() : history(0), pred_component(0), altpred_component(0), pred(false), altpred(false) {
 			memset(bimodal, 0, sizeof bimodal);
 		}
 
 		bool predict(uint32_t pc) {
-			pred_component = tagMatchesPredictor(pc);
-			altpred_component = 0;
+			pred_component = bestMatchComponentBounded(pc, COMPONENT_COUNT + 1);
+			altpred_component = bestMatchComponentBounded(pc, pred_component);
 
 			pred = predictComponent(pc, pred_component);
 			altpred = predictComponent(pc, altpred_component);
@@ -38,19 +46,40 @@ private:
 				updatePredictor(pc, taken);
 			} else {
 				updateBimodal(pc, taken);
+			}
 
-				if (pred != taken) {
-					uint32_t predictorIndex = getPredictorIndex(pc);
-					if (predictor[predictorIndex].useful == 0) {
-						predictor[predictorIndex].pred = 0b100;
-						predictor[predictorIndex].tag = getPredictorTag(pc);
+			if (pred != taken) {
+				int start = pred_component + 1;
+				int rand = random();
+
+				// not sure how this works
+				if (rand & 1) {
+					start++;
+					if (rand & 2) {
+						start++;
+						if (rand & 4) {
+							start++;
+						}
 					}
 				}
+
+
+
+				for (int i = start; i <= COMPONENT_COUNT; i++) {
+					uint32_t predictorIndex = getPredictorIndex(pc, i);
+					PredictorEntry* e = &predictors[i - 1][predictorIndex];
+					if (e->useful == 0) {
+						e->pred = 0b100;
+						e->tag = getPredictorTag(pc, i);
+						break;
+					}
+				}
+
 			}
 
 			// update history
 			history <<= 1;
-			history |= taken;
+			history|= taken;
 		}
 
 	private:
@@ -67,8 +96,8 @@ private:
 		};
 
 		uint8_t bimodal[COMPONENT_SIZE]; // holds 2 bit bimodal counter
-		PredictorEntry predictor[COMPONENT_SIZE];
-		uint32_t history;
+		PredictorEntry predictors[COMPONENT_COUNT][COMPONENT_SIZE];
+		uint64_t history;
 
 		uint32_t pred_component;
 		uint32_t altpred_component;
@@ -95,34 +124,65 @@ private:
 		}
 
 		bool predictComponent(uint32_t pc, uint32_t component) {
-			return predictor[getPredictorIndex(pc)].pred >> 2;
+			if (component > 0) {
+				return predictors[component - 1][getPredictorIndex(pc, component)].pred >> 2;
+			} else {
+				return predictBimodal(pc);
+			}
 		}
 
-		uint32_t getPredictorIndex(uint32_t pc) {
-			return getBimodalIndex(pc) ^ (history & ((1 << INDEX_LENGTH) - 1));
+		uint32_t compressHistory(const uint32_t from, const uint32_t to) {
+			uint32_t out = 0;
+			uint32_t temp = 0;
+
+			for (int i = 0; i < from; i++) {
+				if (i % to == 0) {
+					out ^= temp;
+					temp = 0;
+				}
+				temp = (temp << 1) | ((history >> i) & 1);
+			}
+			out ^= temp;
+			return out;
 		}
 
-		uint32_t getPredictorTag(uint32_t pc) {
-			return pc >> INDEX_LENGTH;
+		uint32_t getPredictorIndex(uint32_t pc, uint32_t component) {
+			uint32_t compressed_history = compressHistory(HISTORY_LENGTH[component - 1], INDEX_LENGTH);
+			return (compressed_history ^ pc ^ (pc >> (INDEX_LENGTH - component) + 1)) & ((1 << INDEX_LENGTH) - 1);
 		}
 
-		bool tagMatchesPredictor(uint32_t pc) {
-			return predictor[getPredictorIndex(pc)].tag == getPredictorTag(pc);
+		uint32_t getPredictorTag(uint32_t pc, uint32_t component) {
+			uint32_t compressed_history = compressHistory(HISTORY_LENGTH[component - 1], TAG_LENGTH);
+			return (compressed_history ^ pc) & ((1 << TAG_LENGTH) - 1);
+		}
+
+		bool tagMatchesPredictor(uint32_t pc, uint32_t component) {
+			return predictors[component - 1][getPredictorIndex(pc, component)].tag == getPredictorTag(pc, component);
+		}
+
+		uint32_t bestMatchComponentBounded(uint32_t pc, uint32_t highest_allowable_component) {
+			for (int i = highest_allowable_component - 1; i >= 1; i--) {
+				if (tagMatchesPredictor(pc, i)) {
+					return i;
+				}
+			}
+			return 0;
 		}
 
 		void updatePredictor(uint32_t pc, bool taken) {
-			uint32_t index = getPredictorIndex(pc);
-			if (taken && predictor[index].pred < 0b111) {
-				predictor[index].pred++;
-			} else if (!taken && predictor[index].pred > 0b000) {
-				predictor[index].pred--;
+			uint32_t index = getPredictorIndex(pc, pred_component);
+			PredictorEntry* e = &predictors[pred_component - 1][index];
+			if (taken && e->pred < 0b111) {
+				e->pred++;
+			} else if (!taken && e->pred > 0b000) {
+				e->pred--;
 			}
 
 			if (pred != altpred) {
-				if (pred == taken && predictor[index].useful < 0b11) {
-					predictor[index].useful++;
-				} else if (pred != taken && predictor[index].useful > 0b00) {
-					predictor[index].useful--;
+				if (pred == taken && e->useful < 0b11) {
+					e->useful++;
+				} else if (pred != taken && e->useful > 0b00) {
+					e->useful--;
 				}
 			}
 		}
