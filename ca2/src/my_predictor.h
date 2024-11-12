@@ -6,13 +6,13 @@
 using namespace std;
 
 
-static const uint32_t INDEX_LENGTH = 10;
+static const uint32_t INDEX_LENGTH = 9;
 static const uint32_t COMPONENT_SIZE = 1 << INDEX_LENGTH;
 static const uint32_t BIMODAL_INDEX_LENGTH = 12;
 static const uint32_t BIMODAL_SIZE = 1 << BIMODAL_INDEX_LENGTH;
-static const uint32_t COMPONENT_COUNT = 4;
-static const uint32_t TAG_LENGTH[COMPONENT_COUNT] = {8, 8, 9, 9};
-static const uint32_t HISTORY_LENGTH[COMPONENT_COUNT] = {5, 15, 44, 130};
+static const uint32_t COMPONENT_COUNT = 7;
+static const uint32_t TAG_LENGTH[COMPONENT_COUNT] = {9, 9, 10, 10, 11, 11, 12};
+static const uint32_t HISTORY_LENGTH[COMPONENT_COUNT] = {5, 9, 15, 25, 44, 76, 130};
 static const uint32_t HISTORY_BUFFER_LENGTH = 150;
 static const uint32_t USEFUL_RESET_INTERVAL = 256000;
 
