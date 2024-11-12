@@ -25,7 +25,8 @@ class my_predictor : public branch_predictor {
 private:
 	class Tage {
 	public:
-		Tage() : num_branches(0), pred_component(0), altpred_component(0), pred(false), altpred(false) {
+		Tage() : num_branches(0), use_alt_on_na(0), strong(false), pred_component(0), altpred_component(0), pred(false),
+		         altpred(false), outpred(false) {
 			memset(bimodal, 2, sizeof bimodal);
 			memset(history, 0, sizeof history);
 		}
@@ -45,7 +46,19 @@ private:
 			pred = predictComponent(pc, pred_component);
 			altpred = predictComponent(pc, altpred_component);
 
-			return pred;
+			if (pred_component == 0) {
+				outpred = pred;
+			} else {
+				int pred_pred = predictors[pred_component - 1][getComponentIndex(pc, pred_component)].pred;
+				strong = !(pred_pred == 0b100 || pred_pred == 0b011);
+				if (use_alt_on_na < 8 || strong) {
+					outpred = pred;
+				} else {
+					outpred = altpred;
+				}
+			}
+
+			return outpred;
 		}
 
 		void update(uint32_t pc, bool taken) {
@@ -56,7 +69,7 @@ private:
 			}
 
 			// attempt to allocate if prediction is incorrect
-			if (pred != taken && pred_component != COMPONENT_COUNT) {
+			if (outpred != taken && pred_component != COMPONENT_COUNT) {
 				const int start = pred_component + 1;
 
 				can_allocate.clear();
@@ -96,7 +109,7 @@ private:
 				num_branches = 0;
 				for (int i = 0; i < COMPONENT_COUNT; i++) {
 					for (int j = 0; j < COMPONENT_SIZE; j++) {
-						predictors[i][j].useful &= 0b01;
+						predictors[i][j].useful >>= 1;
 					}
 				}
 			}
@@ -110,7 +123,7 @@ private:
 				useful = 0;
 			}
 
-			uint8_t pred; // 3 bit prediction
+			uint8_t pred; // 3 bit prediction (>100: yes, <= 011: no)
 			uint16_t tag;
 			uint8_t useful; // 2 bit useful
 		};
@@ -119,12 +132,15 @@ private:
 		PredictorEntry predictors[COMPONENT_COUNT][COMPONENT_SIZE];
 		bool history[HISTORY_BUFFER_LENGTH];
 		int num_branches;
+		int use_alt_on_na; // 4 bits, <8 = don't use alt on new alloc; >=8 = use alt on new alloc
+		bool strong;
 		vector<int> can_allocate;
 
 		int pred_component;
 		int altpred_component;
 		bool pred;
 		bool altpred;
+		bool outpred;
 
 		static uint16_t getBimodalIndex(const uint32_t pc) {
 			return pc & ((1 << BIMODAL_INDEX_LENGTH) - 1);
@@ -191,13 +207,40 @@ private:
 		}
 
 		void updatePredictor(uint32_t pc, bool taken) {
+			// update use_alt_on_na 4 bit counter
+			if (!strong && pred != altpred) {
+				if (use_alt_on_na < 16 && pred != taken) {
+					use_alt_on_na++;
+				} else if (use_alt_on_na > 0 && pred == taken) {
+					use_alt_on_na--;
+				}
+			}
+
+
 			PredictorEntry *e = &predictors[pred_component - 1][getComponentIndex(pc, pred_component)];
+
+			// update alternate if current not useful
+			if (e->useful == 0) {
+				if (altpred_component == 0) {
+					updateBimodal(pc, taken);
+				} else {
+					PredictorEntry *alte = &predictors[altpred_component - 1][getComponentIndex(pc, altpred_component)];
+					if (taken && alte->pred < 0b111) {
+						alte->pred++;
+					} else if (!taken && alte->pred > 0b000) {
+						alte->pred--;
+					}
+				}
+			}
+
+			// update current counter
 			if (taken && e->pred < 0b111) {
 				e->pred++;
 			} else if (!taken && e->pred > 0b000) {
 				e->pred--;
 			}
 
+			// update useful if alternate differs in prediction
 			if (pred != altpred) {
 				if (pred == taken && e->useful < 0b11) {
 					e->useful++;
