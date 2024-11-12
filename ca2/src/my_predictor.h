@@ -30,6 +30,14 @@ private:
 			memset(history, 0, sizeof history);
 		}
 
+		void add_non_conditional_branch() {
+			// update history
+			for (int i = HISTORY_BUFFER_LENGTH - 1; i >= 1; i--) {
+				history[i] = history[i - 1];
+			}
+			history[0] = true;
+		}
+
 		bool predict(uint32_t pc) {
 			pred_component = bestMatchingComponent(pc, COMPONENT_COUNT + 1);
 			altpred_component = bestMatchingComponent(pc, pred_component);
@@ -224,6 +232,8 @@ public:
 	void update(branch_update *u, bool taken, unsigned int target) {
 		if (bi.br_flags & BR_CONDITIONAL) {
 			tage.update(static_cast<my_update *>(u)->pc, taken);
+		} else {
+			tage.add_non_conditional_branch();
 		}
 	}
 };
