@@ -1,5 +1,5 @@
-#include <iostream>
 #include <fstream>
+#include <iostream>
 #include <string>
 using namespace std;
 
@@ -23,7 +23,7 @@ struct Line {
     Coherency c;
     int lru;
     int tag;
-    bool dirty; // does not seem necessary as coherency state can determine whether to writeback
+    bool dirty;
 };
 
 struct Cache {
@@ -35,36 +35,43 @@ struct Cache {
         }
     }
 
-    void updateLRU(const int old) { // set entry with given old LRU state -> most recent
+    void updateLRU(const int old) {  // change entry with given old LRU state to be most recent
         for (int i = 0; i < 4; i++) {
-            if (lines[i].lru > old) lines[i].lru--;
-            else if (lines[i].lru == old) lines[i].lru = 3;
+            if (lines[i].lru > old)
+                lines[i].lru--;
+            else if (lines[i].lru == old)
+                lines[i].lru = 3;
         }
     }
 
-    void install(const int tag, const Coherency c) { // attempt to install with certain tag/coherency state
+    bool install(const int tag, const Coherency c,
+                 const bool dirty) {  // returns whether writeback occurred
         for (int i = 0; i < 4; i++) {
             if (lines[i].c == Invalid) {
-                installIndex(tag, c, i);
-                return;
+                return installIndex(tag, c, dirty, i);
             }
         }
 
         for (int i = 0; i < 4; i++) {
             if (lines[i].lru == 0) {
-                installIndex(tag, c, i);
-                return;
+                return installIndex(tag, c, dirty, i);
             }
         }
+
+        return false;
     }
 
-    void installIndex(const int tag, const Coherency c, const int index) {
-        lines[index].c = c;
+    bool installIndex(const int tag, const Coherency c, const bool dirty, const int index) {
+        const bool out = lines[index].dirty;
+
         lines[index].tag = tag;
+        setCoherency(tag, c);
+        setDirty(tag, dirty);
         updateLRU(lines[index].lru);
+        return out;
     }
 
-    void access(const int tag) { // helper function to update LRU for given tag
+    void access(const int tag) {  // helper function to update LRU for given tag
         for (int i = 0; i < 4; i++) {
             if (lines[i].tag == tag) updateLRU(lines[i].lru);
         }
@@ -84,6 +91,22 @@ struct Cache {
                 break;
             }
         }
+    }
+
+    void setDirty(const int tag, const bool dirty) {
+        for (int i = 0; i < 4; i++) {
+            if (lines[i].tag == tag) {
+                lines[i].dirty = dirty;
+                return;
+            }
+        }
+    }
+
+    bool getDirty(const int tag) const {
+        for (int i = 0; i < 4; i++) {
+            if (lines[i].tag == tag) return lines[i].dirty;
+        }
+        return false;
     }
 };
 
@@ -109,12 +132,15 @@ struct CPU {
 
     void handleRead(const int core, const int tag) {
         bool transferred = false;
+        bool isDirty = false;
 
         switch (cores[core].getCoherency(tag)) {
             case Modified:
             case Owned:
-            case Exclusive:
+            case Forward:
             case Shared:
+                broadcast++;
+            case Exclusive:
                 hit++;
                 cores[core].access(tag);
                 break;
@@ -129,27 +155,33 @@ struct CPU {
                         case Modified:
                             cores[i].setCoherency(tag, Owned);
                             transferred = true;
+                            isDirty = true;
                             break;
                         case Exclusive:
-                            cores[i].setCoherency(tag, Shared);
+                            cores[i].setCoherency(tag, Forward);
                             transferred = true;
                             break;
-                        case Shared:
+                        case Forward:
+                            transferred = true;
+                            break;
                         case Owned:
                             transferred = true;
+                            isDirty = true;
                             break;
-                        default: ;
+                        default:;
                     }
                 }
                 transfer += transferred;
 
-                cores[core].install(tag, transferred ? Shared : Exclusive);
+                writeback += cores[core].install(tag, transferred ? Shared : Exclusive, isDirty);
                 break;
-            default: ;
+            default:;
         }
     }
 
     void handleWrite(const int core, const int tag) {
+        bool needWriteback = false;
+
         switch (cores[core].getCoherency(tag)) {
             case Modified:
                 hit++;
@@ -157,6 +189,7 @@ struct CPU {
                 break;
             case Owned:
                 hit++;
+                needWriteback = true;
 
                 broadcast++;
                 for (int i = 0; i < 4; i++) {
@@ -166,15 +199,17 @@ struct CPU {
                         case Shared:
                             cores[i].setCoherency(tag, Invalid);
                             break;
-                        default: ;
+                        default:;
                     }
                 }
                 cores[core].setCoherency(tag, Modified);
                 cores[core].access(tag);
+                cores[core].setDirty(tag, true);
             case Exclusive:
                 hit++;
                 cores[core].setCoherency(tag, Modified);
                 cores[core].access(tag);
+                cores[core].setDirty(tag, true);
                 break;
             case Shared:
                 hit++;
@@ -185,16 +220,18 @@ struct CPU {
 
                     switch (cores[i].getCoherency(tag)) {
                         case Owned:
-                            writeback++;
+                            needWriteback = true;
+                        case Forward:
                         case Shared:
                             cores[i].setCoherency(tag, Invalid);
                             break;
-                        default: ;
+                        default:;
                     }
                 }
 
                 cores[core].setCoherency(tag, Modified);
                 cores[core].access(tag);
+                cores[core].setDirty(tag, true);
                 break;
             case Invalid:
                 miss++;
@@ -204,24 +241,30 @@ struct CPU {
                     if (i == core) continue;
 
                     switch (cores[i].getCoherency(tag)) {
-                        case Modified:
                         case Owned:
-                            writeback++;
+                            needWriteback = true;
+                        case Modified:
+                        case Forward:
                         case Shared:
                             cores[i].setCoherency(tag, Invalid);
                             break;
-                        default: ;
+                        default:;
                     }
                 }
 
-                cores[core].install(tag, Modified);
+                writeback += cores[core].install(tag, Modified, true);
                 break;
-            default: ;
+            default:;
         }
+        writeback += needWriteback;
     }
 
     void report() const {
-        cout << hit << endl << miss << endl << writeback << endl << broadcast << endl << transfer << endl;
+        cout << hit << endl
+             << miss << endl
+             << writeback << endl
+             << broadcast << endl
+             << transfer;
     }
 };
 
@@ -235,7 +278,7 @@ int main(const int argc, char *argv[]) {
     ifstream actions(argv[1]);
     string action;
     while (getline(actions, action)) {
-        const int core = stoi(action.substr(1, 1));
+        const int core = stoi(action.substr(1, 1)) - 1;
         const bool isRead = action[4] == 'r';
 
         const size_t tagStart = action.find('<') + 1;

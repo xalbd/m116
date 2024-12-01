@@ -1,0 +1,10 @@
+P1: write <100>
+P2: write <100>
+P3: read <100>
+P2: read <100>
+P3: write <100>
+P4: write <100>
+P4: read <100>
+P2: read <100>
+P1: read <100>
+P1: read <100>

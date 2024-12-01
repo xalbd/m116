@@ -1,0 +1,7 @@
+P2: read <160>
+P2: read <100>
+P1: read <120>
+P1: read <100>
+P2: read <160>
+P1: write <120>
+P3: read <100>
